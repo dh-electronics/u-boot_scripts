@@ -1,0 +1,129 @@
+BOOT_SCRIPT_VERSION=v0.2
+
+zImage_file_default=zImage
+initrd_file_default=ramdisk.img
+fdt_file_default=stm32mp151a-dhcor-testbench.dtb
+
+echo "## STM32MP1 DHSOM boot script ${BOOT_SCRIPT_VERSION}"
+
+# Run only on STM32MP1 DHSOM
+if test "${board}" != dh_stm32mp1; then
+  echo "!!! This boot script is only for STM32MP1 DHSOM !!!"
+  exit 1
+fi
+
+# Try to import uLinuxEnv.txt from same device as script was loaded
+env_loaded=n
+for prefix in ${boot_prefixes}
+do
+  echo "## Trying ${devtype} ${devnum}:${distro_bootpart} ${prefix}uLinuxEnv.txt"
+  if test ${env_loaded} != y && test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}uLinuxEnv.txt; then
+    echo "## Loading ${devtype} ${devnum}:${distro_bootpart} ${prefix}uLinuxEnv.txt"
+    load ${devtype} ${devnum}:${distro_bootpart} ${loadaddr} ${prefix}uLinuxEnv.txt && env import -t ${loadaddr} ${filesize} && env_loaded=y
+  fi
+done
+
+# Use default zImage_file
+if test -z "${zImage_file}"; then
+  zImage_file=${zImage_file_default}
+fi
+echo "## Using zImage_file: ${zImage_file}"
+
+# Use default initrd_file
+if test -z "${initrd_file}"; then
+  initrd_file=${initrd_file_default}
+fi
+echo "## Using initrd_file: ${initrd_file}"
+
+# Try to determine required fdt_file if unset
+if test -z "${fdt_file}"; then
+  if test "${board_name}" = dh,stm32mp15xx-dhcom-drc02; then
+    baseboard=dhcom-drc02
+  elif test "${board_name}" = dh,stm32mp15xx-dhcom-pdk2; then
+    baseboard=dhcom-pdk2
+  elif test "${board_name}" = dh,stm32mp15xx-dhcom-picoitx; then
+    baseboard=dhcom-picoitx
+  elif test "${board_name}" = dh,stm32mp15xx-dhcor-drc-compact; then
+    baseboard=dhcor-drc-compact
+  elif test "${board_name}" = dh,stm32mp15xx-dhcor-testbench; then
+    baseboard=dhcor-testbench
+  elif test "${board_name}" = arrow,stm32mp15xx-avenger96 || test "${board_name}" = arrow,stm32mp15xx-dhcor-avenger96; then
+    baseboard=dhcor-avenger96
+  elif test "${board_name}" = dh,stm32mp15xx-dhcor-drc-compact; then
+    baseboard=dhcor-drc-compact
+  else
+    echo "!!! Unknown board_name: ${board_name} !!!"
+  fi
+
+  if test "${soc_type}" = 151A || test "${soc_type}" = 151D; then
+    soc_name=stm32mp151a
+  elif test "${soc_type}" = 151C || test "${soc_type}" = 151F; then
+    soc_name=stm32mp151c
+  elif test "${soc_type}" = 153A || test "${soc_type}" = 153D; then
+    soc_name=stm32mp153a
+  elif test "${soc_type}" = 153C || test "${soc_type}" = 153F; then
+    soc_name=stm32mp153c
+  elif test "${soc_type}" = 157A || test "${soc_type}" = 157D; then
+    soc_name=stm32mp157a
+  elif test "${soc_type}" = 157C || test "${soc_type}" = 157F; then
+    soc_name=stm32mp157c
+  else
+    echo "!!! Unknown soc_type: ${soc_type} !!!"
+  fi
+
+  fdt_file=${soc_name}-${baseboard}.dtb
+
+  fdt_found=n
+  for prefix in ${boot_prefixes}; do
+    if test ${fdt_found} != y && test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}${fdt_file}; then
+      fdt_found=y
+    fi
+  done
+  if test ${fdt_found} != y; then
+    echo "!!! No matching fdt file found for: ${fdt_file} !!!"
+    fdt_file=${fdt_file_default}
+  fi
+fi
+echo "## Using fdt_file: ${fdt_file}"
+
+# Calculate fdtaddr and initrdaddr
+setexpr fdtaddr ${loadaddr} + 0x2000000
+setexpr initrdaddr ${loadaddr} + 0x3000000
+
+# Try to load zImage, fdt and initrd from same device as script was loaded
+zImage_loaded=n
+fdt_loaded=n
+initrd_loaded=n
+for prefix in ${boot_prefixes}
+do
+  echo "## Trying ${devtype} ${devnum}:${distro_bootpart} ${prefix}"
+  if test ${zImage_loaded} != y && test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}${zImage_file}; then
+    echo "## Loading ${devtype} ${devnum}:${distro_bootpart} ${prefix}${zImage_file}"
+    load ${devtype} ${devnum}:${distro_bootpart} ${loadaddr} ${prefix}${zImage_file} && zImage_loaded=y
+  fi
+  if test ${fdt_loaded} != y && test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}${fdt_file}; then
+    echo "## Loading ${devtype} ${devnum}:${distro_bootpart} ${prefix}${fdt_file}"
+    load ${devtype} ${devnum}:${distro_bootpart} ${fdtaddr} ${prefix}${fdt_file} && fdt_loaded=y
+  fi
+  if test ${initrd_loaded} != y && test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}${initrd_file}; then
+    echo "## Loading ${devtype} ${devnum}:${distro_bootpart} ${prefix}${initrd_file}"
+    load ${devtype} ${devnum}:${distro_bootpart} ${initrdaddr} ${prefix}${initrd_file} && initrd_loaded=y
+  fi
+done
+
+# Boot into linux if required files are loaded
+if test ${zImage_loaded} = y && test ${fdt_loaded} = y && test ${initrd_loaded} = y; then
+  bootz ${loadaddr} ${initrdaddr} ${fdtaddr}
+elif test ${zImage_loaded} = y && test ${fdt_loaded} = y; then
+  bootz ${loadaddr} - ${fdtaddr}
+else
+  if test ${zImage_loaded} != y; then
+    echo "## Failed to find a zImage!"
+  fi
+  if test ${fdt_loaded} != y; then
+    echo "## Failed to find a fdt!"
+  fi
+  if test ${initrd_loaded} != y; then
+    echo "## Failed to find a initrd!"
+  fi
+fi
