@@ -1,0 +1,136 @@
+SCRIPT_VERSION=v0.1
+
+echo "## STM32MP15 DHSOM SPI FLASH STATUS REGISTER UPDATE ${SCRIPT_VERSION}"
+
+# Run only on STM32MP15 DHSOM
+if test "${board}" != dh_stm32mp1; then
+    echo "!!! This script is only for STM32MP15 DHSOM !!!"
+    exit
+fi
+
+# JEDEC ID of W25Q16JV (dhcor-testbench) / W25Q16FW (dhcor-avenger96)
+jedec_manufacturer_winbond=0xef
+jedec_type_w25q16jv=0x40
+jedec_type_w25q16fw=0x60
+jedec_size_16mbit=0x15
+
+# Desired non-volatile values for status register's
+# An empty value only reads the status register
+sf_sr1_new=
+sf_sr2_new=
+sf_sr3_new=
+
+# Status register mask's
+sf_sr1_mask=0xfc
+sf_sr2_mask=0x43
+sf_sr3_mask=0x64
+
+# SPI registers
+QUADSPI_BASE=0x58003
+QUADSPI_CR=${QUADSPI_BASE}000
+QUADSPI_FCR=${QUADSPI_BASE}00C
+QUADSPI_DLR=${QUADSPI_BASE}010
+QUADSPI_CCR=${QUADSPI_BASE}014
+QUADSPI_DR=${QUADSPI_BASE}020
+
+# QUADSPI_CR values
+cr_spi_config=0x05000011
+
+# QUADSPI_CCR values (instructions with communication configuration)
+ccr_read_jedec=0x0500019F
+ccr_read_sr1=0x05000105
+ccr_read_sr2=0x05000135
+ccr_read_sr3=0x05000115
+ccr_write_enable=0x00000106
+ccr_write_sr1=0x01000101
+ccr_write_sr2=0x01000131
+ccr_write_sr3=0x01000111
+ccr_enable_reset=0x4000166
+ccr_reset=0x4000199
+
+# QUADSPI_FCR values
+fcr_clear_transfer=0x00000003
+
+# Init SPI flash
+sf probe
+
+echo "############################"
+echo "# Read JEDEC ID            #"
+echo "############################"
+mw ${QUADSPI_CR} ${cr_spi_config}
+mw ${QUADSPI_DLR} 5; mw ${QUADSPI_CCR} ${ccr_read_jedec}; sleep 0.1
+setexpr.b jedec_manufacturer *${QUADSPI_DR}
+setexpr.b jedec_type *${QUADSPI_DR}
+setexpr.b jedec_size *${QUADSPI_DR}
+setexpr.b jedec_04 *${QUADSPI_DR}
+setexpr.b jedec_05 *${QUADSPI_DR}
+mw ${QUADSPI_FCR} ${fcr_clear_transfer}
+echo "  Manufacturer: 0x${jedec_manufacturer}"
+echo "  Type: 0x${jedec_type}"
+echo "  Size: 0x${jedec_size}"
+
+if itest ${jedec_manufacturer} -eq ${jedec_manufacturer_winbond} && \
+   itest ${jedec_type} -eq ${jedec_type_w25q16jv} || \
+   itest ${jedec_type} -eq ${jedec_type_w25q16fw}
+then
+    echo "############################"
+    echo "# Read SR1, SR2 and SR3    #"
+    echo "############################"
+    mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_read_sr1}; sleep 0.1; setexpr.b sf_sr1_read *${QUADSPI_DR}; mw ${QUADSPI_FCR} ${fcr_clear_transfer}; sleep 0.1
+    mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_read_sr2}; sleep 0.1; setexpr.b sf_sr2_read *${QUADSPI_DR}; mw ${QUADSPI_FCR} ${fcr_clear_transfer}; sleep 0.1
+    mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_read_sr3}; sleep 0.1; setexpr.b sf_sr3_read *${QUADSPI_DR}; mw ${QUADSPI_FCR} ${fcr_clear_transfer}; sleep 0.1
+    setexpr sf_sr1_read_masked ${sf_sr1_read} \& ${sf_sr1_mask}
+    setexpr sf_sr2_read_masked ${sf_sr2_read} \& ${sf_sr2_mask}
+    setexpr sf_sr3_read_masked ${sf_sr3_read} \& ${sf_sr3_mask}
+    echo "  SR1: 0x${sf_sr1_read} (MASKED: 0x${sf_sr1_read_masked})"
+    echo "  SR2: 0x${sf_sr2_read} (MASKED: 0x${sf_sr2_read_masked})"
+    echo "  SR3: 0x${sf_sr3_read} (MASKED: 0x${sf_sr3_read_masked})"
+
+    echo "############################"
+    echo "# Write SR1, SR2 and SR3   #"
+    echo "############################"
+    need_reset=n
+    if test -n "${sf_sr1_new}"; then setexpr sf_sr1_new_masked ${sf_sr1_new} \& ${sf_sr1_mask}; fi
+    if test -n "${sf_sr2_new}"; then setexpr sf_sr2_new_masked ${sf_sr2_new} \& ${sf_sr2_mask}; fi
+    if test -n "${sf_sr3_new}"; then setexpr sf_sr3_new_masked ${sf_sr3_new} \& ${sf_sr3_mask}; fi
+    if test -n "${sf_sr1_new}" && itest ${sf_sr1_read_masked} -ne ${sf_sr1_new_masked}; then
+        echo "  SR1: ${sf_sr1_new} (MASKED: 0x${sf_sr1_new_masked})"
+        gpio set GPIOF7
+        mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_write_enable}; sleep 0.1
+        mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_write_sr1}; sleep 0.1; mw ${QUADSPI_DR} ${sf_sr1_new_masked}; sleep 0.1
+        mw ${QUADSPI_FCR} ${fcr_clear_transfer}; sleep 0.1
+        need_reset=y
+    fi
+    if test -n "${sf_sr2_new}" && itest ${sf_sr2_read_masked} -ne ${sf_sr2_new_masked}; then
+        echo "  SR2: ${sf_sr2_new} (MASKED: 0x${sf_sr2_new_masked})"
+        gpio set GPIOF7
+        mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_write_enable}; sleep 0.1
+        mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_write_sr2}; sleep 0.1; mw ${QUADSPI_DR} ${sf_sr2_new_masked}; sleep 0.1
+        mw ${QUADSPI_FCR} ${fcr_clear_transfer}; sleep 0.1
+        need_reset=y
+    fi
+    if test -n "${sf_sr3_new}" && itest ${sf_sr3_read_masked} -ne ${sf_sr3_new_masked}; then
+        echo "  SR3: ${sf_sr3_new} (MASKED: 0x${sf_sr3_new_masked})"
+        gpio set GPIOF7
+        mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_write_enable}; sleep 0.1
+        mw ${QUADSPI_CR} ${cr_spi_config}; mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_write_sr3}; sleep 0.1; mw ${QUADSPI_DR} ${sf_sr3_new_masked}; sleep 0.1
+        mw ${QUADSPI_FCR} ${fcr_clear_transfer}; sleep 0.1
+        need_reset=y
+    fi
+
+    if test ${need_reset} != y; then
+        echo "############################"
+        echo "# Reset SPI Flash          #"
+        echo "############################"
+        echo "!!! Probably U-boot restart is required to make SPI flash available again !!!"
+        mw ${QUADSPI_CR} ${cr_spi_config}
+        mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_enable_reset}; sleep 0.1
+        mw ${QUADSPI_DLR} 0; mw ${QUADSPI_CCR} ${ccr_reset}; sleep 0.1
+        mw ${QUADSPI_FCR} ${fcr_clear_transfer}; sleep 0.1
+        sf probe
+        sf probe
+    fi
+else
+    echo "!!! This is only for W25Q16JV (dhcor-testbench) / W25Q16FW (dhcor-avenger96) !!!"
+    exit
+fi
