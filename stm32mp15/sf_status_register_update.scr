@@ -18,7 +18,7 @@ jedec_size_16mbit=0x15
 # An empty value only reads the status register
 sf_sr1_new=
 sf_sr2_new=
-sf_sr3_new=
+sf_sr3_new=0x60
 
 # Status register mask's
 sf_sr1_mask=0xfc
