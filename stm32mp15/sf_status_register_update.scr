@@ -118,7 +118,7 @@ then
         need_reset=y
     fi
 
-    if test ${need_reset} != y; then
+    if test ${need_reset} != n; then
         echo "############################"
         echo "# Reset SPI Flash          #"
         echo "############################"
